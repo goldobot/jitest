@@ -12,30 +12,6 @@ config JITEST
 
 if JITEST
 
-config EXAMPLE_TIMER_DEVNAME
-	string "Timer device name"
-	default "/dev/timer0"
-	---help---
-		This is the name of the timer device that will be tested.
-
-config EXAMPLE_TIMER_INTERVAL
-	int "Timer interval (microseconds)"
-	default 1000000
-	---help---
-		This is the timer interval in microseconds.
-
-config EXAMPLE_TIMER_DELAY
-	int "Sample delay (microseconds)"
-	default 100000
-	---help---
-		This is the delay between timer samples in microseconds
-
-config EXAMPLE_TIMER_NSAMPLES
-	int "Number of samples"
-	default 20
-	---help---
-		This is the number of timer samples that will be collected
-
 config JITEST_APPNAME
 	string "Executable name"
 	default "jitest"

@@ -44,34 +44,51 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <semaphore.h>
+#include <pthread.h>
 
+#include <nuttx/semaphore.h>
 #include <nuttx/timers/timer.h>
+
+#if defined( CONFIG_ARCH_CHIP_STM32)
+#include "stm32gpio.h"
+#define GPIOCONFIG stm32_configgpio
+#define GPIOWRITE  stm32_gpiowrite
+#elif defined( CONFIG_ARCH_CHIP_STM32L4)
+#include "stm32l4gpio.h"
+#define GPIOCONFIG stm32l4_configgpio
+#define GPIOWRITE  stm32l4_gpiowrite
+#else
+#error this app is only for stm32
+#endif
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-#ifndef CONFIG_JITEST_DEVNAME
-#  define CONFIG_JITEST_DEVNAME "/dev/timer0"
-#endif
 
-#ifndef CONFIG_JITEST_INTERVAL
-#  define CONFIG_JITEST_INTERVAL 1000000
-#endif
+//config at  10 Hz = 100ms = 100000us
+//config at 100 Hz = 10ms  = 10000us
 
-#ifndef CONFIG_JITEST_DELAY
-#  define CONFIG_JITEST_DELAY 100000
-#endif
+#define CONFIG_JITEST_DEVNAME "/dev/timer0"
 
-#ifndef CONFIG_JITEST_NSAMPLES
-#  define CONFIG_JITEST_NSAMPLES 20
-#endif
+#define CONFIG_JITEST_INTERVAL 10000 //timer interval
+
+#define CONFIG_JITEST_DELAY 100000 //sleep interval
+#define CONFIG_JITEST_NSAMPLES 500 //sleep count
+
+#define GPIO_IRQ (GPIO_PORTC|GPIO_PIN11|GPIO_OUTPUT|GPIO_SPEED_50MHz|GPIO_PUSHPULL|GPIO_OUTPUT_CLEAR)
+#define GPIO_TSK (GPIO_PORTD|GPIO_PIN2 |GPIO_OUTPUT|GPIO_SPEED_50MHz|GPIO_PUSHPULL|GPIO_OUTPUT_CLEAR)
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
 
-int global;
+int global_irq;
+int global_tsk;
+int quit;
+
+sem_t trigger;
 
 /****************************************************************************
  * timer_handler
@@ -84,35 +101,33 @@ static bool timer_handler(FAR uint32_t *next_interval_us)
    * (1) Modify the timeout value to change the frequency dynamically, or
    * (2) Return false to stop the timer.
    */
-  global++;
-
+  global_irq = !global_irq;
+  GPIOWRITE(GPIO_IRQ, global_irq); 
+  sem_post(&trigger);
   return true;
 }
 
-/****************************************************************************
- * timer_status
- ****************************************************************************/
+static void *thread(void *arg)
+  {
+    while(!quit)
+      {
+        sem_wait(&trigger);
+        global_tsk = !global_tsk;
+        GPIOWRITE(GPIO_TSK, global_tsk); 
+      }
+    return NULL;
+  }
 
-static void timer_status(int fd)
-{
-  struct timer_status_s status;
-  int ret;
-
-  /* Get timer status */
-
-  ret = ioctl(fd, TCIOC_GETSTATUS, (unsigned long)((uintptr_t)&status));
-  if (ret < 0)
-    {
-      fprintf(stderr, "WARNING: Failed to get timer status: %d\n", errno);
-      return;
-    }
-
-  /* Print the timer status */
-
-  printf("  flags: %08lx timeout: %lu timeleft: %lu\n",
-         (unsigned long)status.flags, (unsigned long)status.timeout,
-         (unsigned long)status.timeleft);
-}
+static void *hog(void *arg)
+  {
+    int i;
+    while(!quit)
+      {
+        i++;
+        printf("%d",i);
+      }
+    return NULL;
+  }
 
 /****************************************************************************
  * Public Functions
@@ -132,8 +147,31 @@ int jitest_main(int argc, char *argv[])
   int ret;
   int fd;
   int i;
+  pthread_t id,hog;
 
-  global = 0;
+  global_irq = 0;
+  GPIOCONFIG(GPIO_IRQ);
+
+  global_tsk = 0;
+  GPIOCONFIG(GPIO_TSK);
+
+  quit = 0;
+  sem_init(&trigger,0,0);
+  sem_setprotocol(&trigger, SEM_PRIO_NONE); //flip-flop fifo, avoids prio inh if enabled
+
+  pthread_create(&id, NULL, thread, NULL);
+  pthread_setschedprio(id, PTHREAD_DEFAULT_PRIORITY);
+
+  if(argc>1)
+    {
+      pthread_create(&hog, NULL, hog, NULL);
+      pthread_setschedprio(hog, PTHREAD_DEFAULT_PRIORITY);
+
+      if(!strcmp(argv[1], "hi"))
+        {
+          pthread_setschedprio(id, PTHREAD_DEFAULT_PRIORITY+10);
+        }
+    }
 
   /* Open the timer device */
 
@@ -147,9 +185,6 @@ int jitest_main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
 
-  /* Show the timer status before setting the timer interval */
-
-  timer_status(fd);
 
   /* Set the timer interval */
 
@@ -163,10 +198,6 @@ int jitest_main(int argc, char *argv[])
       close(fd);
       return EXIT_FAILURE;
     }
-
-  /* Show the timer status before attaching the timer handler */
-
-  timer_status(fd);
 
   /* Attach the timer handler
    *
@@ -186,10 +217,6 @@ int jitest_main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
 
-  /* Show the timer status before starting */
-
-  timer_status(fd);
-
   /* Start the timer */
 
   printf("Start the timer\n");
@@ -202,12 +229,9 @@ int jitest_main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
 
-  /* Wait a bit showing timer status */
-
   for (i = 0; i < CONFIG_JITEST_NSAMPLES; i++)
     {
       usleep(CONFIG_JITEST_DELAY);
-      timer_status(fd);
     }
 
   /* Stop the timer */
@@ -222,13 +246,9 @@ int jitest_main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
 
-  /* Show the timer status before starting */
-
-  timer_status(fd);
-
   /* Close the timer driver */
 
-  printf("Finished, global value: %d\n", global);
+  printf("Finished\n");
   close(fd);
   return EXIT_SUCCESS;
 }
