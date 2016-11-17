@@ -42,6 +42,7 @@
 #include <sys/ioctl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <semaphore.h>
@@ -147,7 +148,7 @@ int jitest_main(int argc, char *argv[])
   int ret;
   int fd;
   int i;
-  pthread_t id,hog;
+  pthread_t id,idhog;
 
   global_irq = 0;
   GPIOCONFIG(GPIO_IRQ);
@@ -164,8 +165,8 @@ int jitest_main(int argc, char *argv[])
 
   if(argc>1)
     {
-      pthread_create(&hog, NULL, hog, NULL);
-      pthread_setschedprio(hog, PTHREAD_DEFAULT_PRIORITY);
+      pthread_create(&idhog, NULL, hog, NULL);
+      pthread_setschedprio(idhog, PTHREAD_DEFAULT_PRIORITY);
 
       if(!strcmp(argv[1], "hi"))
         {
