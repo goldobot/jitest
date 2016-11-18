@@ -47,6 +47,7 @@
 #include <errno.h>
 #include <semaphore.h>
 #include <pthread.h>
+#include <signal.h>
 
 #include <nuttx/semaphore.h>
 #include <nuttx/timers/timer.h>
@@ -85,7 +86,7 @@
  * Private Functions
  ****************************************************************************/
 
-int global_irq;
+int global_sig;
 int global_tsk;
 int quit;
 
@@ -95,17 +96,17 @@ sem_t trigger;
  * timer_handler
  ****************************************************************************/
 
-static bool timer_handler(FAR uint32_t *next_interval_us)
+void timerhandler(int signo, FAR siginfo_t *siginfo, FAR void *context)
 {
   /* This handler may:
    *
    * (1) Modify the timeout value to change the frequency dynamically, or
    * (2) Return false to stop the timer.
    */
-  global_irq = !global_irq;
-  GPIOWRITE(GPIO_IRQ, global_irq); 
+  global_sig = !global_sig;
+  GPIOWRITE(GPIO_TSK, global_sig); 
+
   sem_post(&trigger);
-  return true;
 }
 
 static void *thread(void *arg)
@@ -114,8 +115,8 @@ static void *thread(void *arg)
       {
         sem_wait(&trigger);
         global_tsk = !global_tsk;
-        GPIOWRITE(GPIO_TSK, global_tsk); 
       }
+    printf("tmr task done\n");
     return NULL;
   }
 
@@ -127,6 +128,7 @@ static void *hog(void *arg)
         i++;
         printf("%d",i);
       }
+    printf("hog done\n");
     return NULL;
   }
 
@@ -144,16 +146,15 @@ int main(int argc, FAR char *argv[])
 int jitest_main(int argc, char *argv[])
 #endif
 {
-  struct timer_sethandler_s handler;
+  struct timer_notify_s notify;
+  struct sigaction sig;
   int ret;
   int fd;
   int i;
   pthread_t id,idhog;
 
-  global_irq = 0;
-  GPIOCONFIG(GPIO_IRQ);
-
   global_tsk = 0;
+  global_sig = 0;
   GPIOCONFIG(GPIO_TSK);
 
   quit = 0;
@@ -207,10 +208,11 @@ int jitest_main(int argc, char *argv[])
 
   printf("Attach timer handler\n");
 
-  handler.newhandler = timer_handler;
-  handler.oldhandler = NULL;
+  notify.signo = 1;
+  notify.pid   = getpid();
+  notify.arg   = NULL;
 
-  ret = ioctl(fd, TCIOC_SETHANDLER, (unsigned long)((uintptr_t)&handler));
+  ret = ioctl(fd, TCIOC_NOTIFICATION, (unsigned long)((uintptr_t)&notify));
   if (ret < 0)
     {
       fprintf(stderr, "ERROR: Failed to set the timer handler: %d\n", errno);
@@ -218,6 +220,19 @@ int jitest_main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
 
+  /* Install the signal handler */
+  sig.sa_sigaction = timerhandler;
+  sig.sa_flags     = SA_SIGINFO;
+  sig.sa_mask      = 0xFFFF;
+
+  ret = sigaction(1, &sig, NULL);
+  if (ret < 0)
+    {
+      fprintf(stderr, "ERROR: Failed to install the signal handler: %d\n", errno);
+      close(fd);
+      return EXIT_FAILURE;
+    }
+  
   /* Start the timer */
 
   printf("Start the timer\n");
@@ -248,6 +263,10 @@ int jitest_main(int argc, char *argv[])
     }
 
   /* Close the timer driver */
+
+  quit=1;
+  kill(id, 1);
+  kill(idhog, 1);
 
   printf("Finished\n");
   close(fd);
