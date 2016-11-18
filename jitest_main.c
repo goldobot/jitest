@@ -104,8 +104,8 @@ printf("tmr task start\n");
     while(!quit)
       {
         sigwaitinfo(&set, &info);
-        global_tsk = !global_tsk;
         GPIOWRITE(GPIO_TSK, global_tsk); 
+        global_tsk = !global_tsk;
       }
     printf("tmr task done\n");
     return NULL;
