@@ -90,31 +90,22 @@ int global_sig;
 int global_tsk;
 int quit;
 
-sem_t trigger;
-
 /****************************************************************************
  * timer_handler
  ****************************************************************************/
 
-void timerhandler(int signo, FAR siginfo_t *siginfo, FAR void *context)
-{
-  /* This handler may:
-   *
-   * (1) Modify the timeout value to change the frequency dynamically, or
-   * (2) Return false to stop the timer.
-   */
-  global_sig = !global_sig;
-  GPIOWRITE(GPIO_TSK, global_sig); 
-
-  sem_post(&trigger);
-}
-
 static void *thread(void *arg)
   {
+    sigset_t set;
+    siginfo_t info;
+    sigfillset(&set);
+
+printf("tmr task start\n");
     while(!quit)
       {
-        sem_wait(&trigger);
+        sigwaitinfo(&set, &info);
         global_tsk = !global_tsk;
+        GPIOWRITE(GPIO_TSK, global_tsk); 
       }
     printf("tmr task done\n");
     return NULL;
@@ -147,7 +138,6 @@ int jitest_main(int argc, char *argv[])
 #endif
 {
   struct timer_notify_s notify;
-  struct sigaction sig;
   int ret;
   int fd;
   int i;
@@ -158,8 +148,6 @@ int jitest_main(int argc, char *argv[])
   GPIOCONFIG(GPIO_TSK);
 
   quit = 0;
-  sem_init(&trigger,0,0);
-  sem_setprotocol(&trigger, SEM_PRIO_NONE); //flip-flop fifo, avoids prio inh if enabled
 
   pthread_create(&id, NULL, thread, NULL);
   pthread_setschedprio(id, PTHREAD_DEFAULT_PRIORITY);
@@ -168,7 +156,6 @@ int jitest_main(int argc, char *argv[])
     {
       pthread_create(&idhog, NULL, hog, NULL);
       pthread_setschedprio(idhog, PTHREAD_DEFAULT_PRIORITY);
-
       if(!strcmp(argv[1], "hi"))
         {
           pthread_setschedprio(id, PTHREAD_DEFAULT_PRIORITY+10);
@@ -209,7 +196,7 @@ int jitest_main(int argc, char *argv[])
   printf("Attach timer handler\n");
 
   notify.signo = 1;
-  notify.pid   = getpid();
+  notify.pid   = id;
   notify.arg   = NULL;
 
   ret = ioctl(fd, TCIOC_NOTIFICATION, (unsigned long)((uintptr_t)&notify));
@@ -220,19 +207,6 @@ int jitest_main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
 
-  /* Install the signal handler */
-  sig.sa_sigaction = timerhandler;
-  sig.sa_flags     = SA_SIGINFO;
-  sig.sa_mask      = 0xFFFF;
-
-  ret = sigaction(1, &sig, NULL);
-  if (ret < 0)
-    {
-      fprintf(stderr, "ERROR: Failed to install the signal handler: %d\n", errno);
-      close(fd);
-      return EXIT_FAILURE;
-    }
-  
   /* Start the timer */
 
   printf("Start the timer\n");
